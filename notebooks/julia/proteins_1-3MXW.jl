@@ -290,7 +290,7 @@ println("-----------------------------------------------------------------------
 println("Discretizing proteins into 3D volumes...")
 
 # rotate unbound ligand protein by arbitrary matrix
-init_rotation_vec = rand(3)
+init_rotation_vec = [0.667, 0.606, 0.432]
 init_rotation_vec /= norm(init_rotation_vec)
 inv_rotation_vec = [init_rotation_vec[1], -1.0*init_rotation_vec[2], -1.0*init_rotation_vec[3]]
 init_rotation = get_rotation(init_rotation_vec)

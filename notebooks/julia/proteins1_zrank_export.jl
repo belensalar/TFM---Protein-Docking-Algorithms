@@ -9,6 +9,8 @@ using CoordinateTransformations
 using Interpolations
 using FFTW
 using StatsBase
+using Printf
+
 
 #= Julia implementation of the algorithm described in "Docking Unbound Proteins Using Shape Complementarity,
 Desolvation, and Electrostatics", Rong Chen and Zhiping Weng (2002). Implements the shape complementarity scoring
@@ -290,7 +292,7 @@ println("-----------------------------------------------------------------------
 println("Discretizing proteins into 3D volumes...")
 
 # rotate unbound ligand protein by arbitrary matrix
-init_rotation_vec = rand(3)
+init_rotation_vec = [0.667, 0.606, 0.432]
 init_rotation_vec /= norm(init_rotation_vec)
 inv_rotation_vec = [init_rotation_vec[1], -1.0*init_rotation_vec[2], -1.0*init_rotation_vec[3]]
 init_rotation = get_rotation(init_rotation_vec)
@@ -453,3 +455,89 @@ for candidate_idx in 1:length(close_irmsds)
     theta = acos(dot(rotation_vector, inv_rotation_vec)) * 180 / pi
     println(string("Angle formed with correct inverse vector (degrees): ", theta))
 end
+
+# -----------------------------------------EXPORT TOP POSES FOR ZRANK---------------------------------------------------------
+
+function transform_point(coords, rotation::Matrix{Float64}, translation::Vector, midpt)
+    new_coords = coords - midpt
+    new_coords = [
+        dot(new_coords, rotation[1,:]),
+        dot(new_coords, rotation[2,:]),
+        dot(new_coords, rotation[3,:])
+    ]
+    new_coords += translation + midpt
+    return new_coords
+end
+
+function atom_line(atom_serial::Int, atom_name, res_name, chain_id, res_num::Int, coords, element)
+    atom_name = String(atom_name)
+    res_name = String(res_name)
+    element = String(element)
+
+    @sprintf("ATOM  %5d %-4s %-3s %1s%4d    %8.3f%8.3f%8.3f  1.00 20.00           %2s",
+             atom_serial, atom_name, res_name, string(chain_id), res_num,
+             coords[1], coords[2], coords[3], element)
+end
+
+function write_combined_pose_pdb(outpath::String, receptor, ligand, rotation::Matrix{Float64}, translation::Vector)
+    ligand_atoms_all = collectatoms(ligand)
+    ligand_midpt_full = calc_midpoint([atom.coords for atom in ligand_atoms_all])
+
+    open(outpath, "w") do io
+        atom_serial = 1
+
+        # receptor sin transformar
+        for chain_id in keys(receptor.chains)
+            for res in collectresidues(receptor[chain_id])
+                res.het_res && continue
+                for atom in values(res.atoms)
+                    coords = atom.coords
+                    atom_name = strip(atom.name)
+                    res_name = strip(res.name)
+                    element = strip(atom.element)
+                    println(io, atom_line(atom_serial, atom_name, res_name, chain_id, res.number, coords, element))
+                    atom_serial += 1
+                end
+            end
+        end
+
+        println(io, "TER")
+
+        # ligando transformado
+        for chain_id in keys(ligand.chains)
+            for res in collectresidues(ligand[chain_id])
+                res.het_res && continue
+                for atom in values(res.atoms)
+                    coords = transform_point(atom.coords, rotation, translation, ligand_midpt_full)
+                    atom_name = strip(atom.name)
+                    res_name = strip(res.name)
+                    element = strip(atom.element)
+                    println(io, atom_line(atom_serial, atom_name, res_name, chain_id, res.number, coords, element))
+                    atom_serial += 1
+                end
+            end
+        end
+
+        println(io, "END")
+    end
+end
+
+export_top_n = 20
+zrank_dir = mkpath(string(protein_complex_pdb_id, "_zrank_inputs"))
+listfile_path = string(zrank_dir, "/listfile.txt")
+
+open(listfile_path, "w") do listio
+    for pose_idx in 1:min(export_top_n, length(top_scores))
+        rotation_idx, t, score = top_scores[pose_idx]
+        translation = voxel_size * ([t[1], t[2], t[3]] - [center_val+1, center_val+1, center_val+1])
+        rotation = get_rotation(rotation_vectors[rotation_idx,:])
+
+        outpdb = string(zrank_dir, "/pose_", lpad(string(pose_idx), 4, "0"), ".pdb")
+        write_combined_pose_pdb(outpdb, proteins_dict["r_u"], proteins_dict["l_u"], rotation, translation)
+        println(listio, outpdb)
+    end
+end
+
+println("----------------------------------------------------------------------------")
+println(string("Exported top poses for ZRANK to: ", zrank_dir))
+println(string("List file: ", listfile_path))
